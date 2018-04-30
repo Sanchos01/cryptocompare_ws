@@ -1,7 +1,7 @@
 defmodule CryptocompareWs.Handler do
   use GenServer
   require Logger
-  @rgx ~r/(?<SubscriptionId>[^~]+)~(?<ExchangeName>[^~]+)~(?<First>[^~]+)~(?<Second>[^~]+)~(?<Flag>[^~]+)~(?<TradeId>[^~]+)~(?<Ts>[^~]+)~(?<Quantity>[^~]+)~(?<Price>[^~]+)~(?<Total>[^~]+)/
+  @rgx ~r/\A(?<Id>.+)~(?<ExchangeName>.+)~(?<First>.+)~(?<Second>.+)~(?<Flag>.+)~(?<TradeId>.+)~(?<Ts>.+)~(?<Quantity>.+)~(?<Price>.+)~(?<Total>.+)~.*/
   @ets :_trades
 
   def start_link(_), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
@@ -15,10 +15,11 @@ defmodule CryptocompareWs.Handler do
   end
 
   def handle_info(["m", <<"0", _::binary>> = sub_msg], state) do
-    with %{"First" => f, "Second" => s, "TradeId" => t} = result <- Regex.named_captures(@rgx, sub_msg) do
-      :ets.insert @ets, {{f, s, t}, result}
+    with %{"First" => first, "Second" => second, "Ts" => ts} = result <- Regex.named_captures(@rgx, sub_msg) do
+      key = {first, second, ts}
+      :ets.insert @ets, {key, result}
     else
-      _ -> Logger.warn "unmatched msg: #{inspect sub_msg}"
+      _ -> Logger.warn "unmatched msg: #{sub_msg}"
     end
     {:noreply, state}
   end
