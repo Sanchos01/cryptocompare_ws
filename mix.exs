@@ -24,6 +24,7 @@ defmodule CryptocompareWs.Mixfile do
     [
       {:gun, github: "ninenines/gun"},
       {:poison, "~> 3.1"},
+      {:gen_stage, "~> 0.12"},
     ]
   end
 end
