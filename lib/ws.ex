@@ -6,13 +6,25 @@ defmodule CryptocompareWs.Ws do
   def start_link(_), do: GenStage.start_link(__MODULE__, [], name: __MODULE__)
 
   def init(_) do
-    {:ok, pid} = :gun.open('streamer.cryptocompare.com', 443)
-    mon = Process.monitor pid
-    ref = :gun.ws_upgrade pid, "/socket.io/websocket?transport=websocket", [{"Content-Type", "application/json"}]
-    {:producer, %{pid: pid, mon: mon, ref: ref, time_ref: nil, timeout: nil}, demand: :forward}
+    send self(), :init
+    {:producer, %{pid: nil, monitor: nil, ws_ref: nil, time_ref: nil, timeout: nil}, demand: :forward}
   end
 
   def handle_demand(_demand, state), do: {:noreply, [], state}
+
+  def handle_info(:init, state) do
+    with {:ok, pid}                 <- :gun.open('streamer.cryptocompare.com', 443),
+         mon when is_reference(mon) <- Process.monitor(pid),
+         ref when is_reference(ref) <- :gun.ws_upgrade(pid, "/socket.io/websocket?transport=websocket", [{"Content-Type", "application/json"}])
+    do
+      {:noreply, [], %{state | pid: pid, monitor: mon, ws_ref: ref}}
+    else
+      _ ->
+        Logger.warn "can't connect to ws"
+        Process.send_after(self(), :init, 5_000)
+        {:noreply, [], state}
+    end
+  end
 
   def handle_info({:gun_up, _pid, type}, state) do
     Logger.debug "gun up #{type}"
@@ -80,19 +92,32 @@ defmodule CryptocompareWs.Ws do
     {:noreply, [], state}
   end
 
-  def handle_info({:gun_down, _pid, :ws, :closed, _, _}, state = %{pid: pid}) do
+  def handle_info({:gun_down, _pid, :ws, :closed, _, _}, state) do
     Logger.debug "ws down, upgrade again"
-    ref = :gun.ws_upgrade pid, "/socket.io/websocket?transport=websocket"
-    {:noreply, [], %{state | ref: ref}}
+    ws_reconnect(state)
   end
+  def handle_info(:connect_ws, state = %{ref: nil}), do: ws_reconnect(state)
+  def handle_info(:connect_ws, state), do: {:noreply, [], state}
 
-  def handle_info({:DOWN, mon, :process, pid, reason}, state = %{pid: pid, mon: mon}) do
+  def handle_info({:DOWN, mon, :process, pid, reason}, %{pid: pid, monitor: mon, time_ref: ref}) do
     Logger.error "gun crushed: #{inspect reason}"
-    {:noreply, [], state}
+    ref && Process.cancel_timer ref
+    send self(), :init
+    {:noreply, [], %{pid: nil, monitor: nil, ws_ref: nil, time_ref: nil, timeout: nil}}
   end
 
   def handle_info(msg, state) do
     Logger.debug "Totally unknown msg: #{inspect msg}"
     {:noreply, [], state}
+  end
+
+  defp ws_reconnect(state = %{pid: pid}) do
+    with ref when is_reference(ref) <- :gun.ws_upgrade pid, "/socket.io/websocket?transport=websocket" do
+      {:noreply, [], %{state | ws_ref: ref}}
+    else
+      _ ->
+        Process.send_after(self(), :connect_ws, 5_000)
+        {:noreply, [], %{state | ws_ref: nil}}
+    end
   end
 end
